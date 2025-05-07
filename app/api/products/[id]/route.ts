@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import clientPromise from "@/lib/mongodb"
 import { ObjectId } from "mongodb"
+import { recordPriceChange, getProductPriceHistory } from "@/lib/price-history"
 
 // GET a single product by ID
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
@@ -16,6 +17,20 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 
     if (!product) {
       return NextResponse.json({ success: false, error: "Product not found" }, { status: 404 })
+    }
+
+    // Check if we should include price history
+    const includeHistory = request.nextUrl.searchParams.get("includeHistory") === "true"
+
+    if (includeHistory) {
+      const priceHistory = await getProductPriceHistory(params.id)
+      return NextResponse.json({
+        success: true,
+        data: {
+          ...product,
+          priceHistory,
+        },
+      })
     }
 
     return NextResponse.json({ success: true, data: product })
@@ -35,6 +50,13 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       return NextResponse.json({ success: false, error: "Invalid product ID" }, { status: 400 })
     }
 
+    // Get the current product data for price history
+    const currentProduct = await db.collection("products").findOne({ _id: new ObjectId(params.id) })
+
+    if (!currentProduct) {
+      return NextResponse.json({ success: false, error: "Product not found" }, { status: 404 })
+    }
+
     const data = await request.json()
 
     // Prepare update data
@@ -45,12 +67,32 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
 
     // Convert numeric fields
     if (data.price !== undefined) updateData.price = Number(data.price)
+    if (data.cost !== undefined) updateData.cost = Number(data.cost)
     if (data.stock !== undefined) updateData.stock = Number(data.stock)
+
+    // Check if price or cost is being updated
+    const priceOrCostChanged =
+      (data.price !== undefined && data.price != currentProduct.price) ||
+      (data.cost !== undefined && data.cost != currentProduct.cost)
 
     const result = await db.collection("products").updateOne({ _id: new ObjectId(params.id) }, { $set: updateData })
 
     if (result.matchedCount === 0) {
       return NextResponse.json({ success: false, error: "Product not found" }, { status: 404 })
+    }
+
+    // Record price history if price or cost changed
+    if (priceOrCostChanged) {
+      await recordPriceChange(
+        params.id,
+        { cost: currentProduct.cost, price: currentProduct.price },
+        {
+          cost: data.cost !== undefined ? Number(data.cost) : currentProduct.cost,
+          price: data.price !== undefined ? Number(data.price) : currentProduct.price,
+        },
+        data.priceChangeReason || "Product update",
+        request.headers.get("user-id") || undefined,
+      )
     }
 
     return NextResponse.json({

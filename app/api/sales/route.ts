@@ -83,6 +83,7 @@ export async function POST(request: NextRequest) {
     // Process items and check stock
     const processedItems: SaleItem[] = []
     let total = 0
+    let totalCost = 0
 
     for (const item of data.items) {
       if (!ObjectId.isValid(item.productId)) {
@@ -111,16 +112,19 @@ export async function POST(request: NextRequest) {
       }
 
       const subtotal = product.price * item.quantity
+      const unitCost = product.cost !== undefined ? product.cost : 0 // Default to 0 if cost is undefined
 
       processedItems.push({
         productId: new ObjectId(item.productId),
         productName: product.name,
         quantity: item.quantity,
         unitPrice: product.price,
+        unitCost: unitCost, // Store the cost price
         subtotal,
       })
 
       total += subtotal
+      totalCost += unitCost * item.quantity // Calculate total cost
 
       // Update product stock
       await db
@@ -153,6 +157,8 @@ export async function POST(request: NextRequest) {
       items: processedItems,
       paymentMethods: data.paymentMethods,
       total,
+      totalCost, // Add the total cost
+      profit: total - totalCost, // Calculate the profit
       status: data.status || "completed",
       createdAt: new Date(),
       updatedAt: new Date(),

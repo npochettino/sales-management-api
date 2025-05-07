@@ -5,6 +5,7 @@ export interface SaleItem {
   productName: string
   quantity: number
   unitPrice: number
+  unitCost: number // Add unit cost to track margins
   subtotal: number
 }
 
@@ -20,6 +21,8 @@ export interface Sale {
   items: SaleItem[]
   paymentMethods: PaymentMethod[]
   total: number
+  totalCost: number // Add total cost for margins
+  profit: number // Add profit calculation
   status: "pending" | "completed" | "cancelled"
   createdAt: Date
   updatedAt: Date

@@ -33,6 +33,7 @@ export default function DashboardPage() {
       const fetchData = async () => {
         try {
           setLoadingData(true)
+          setError("") // Clear any previous errors
 
           // Fetch products
           const productsResponse = await productService.getProducts()
@@ -48,6 +49,7 @@ export default function DashboardPage() {
 
           setLoadingData(false)
         } catch (err: any) {
+          console.error("Dashboard data fetch error:", err)
           setError(err.message || "Failed to fetch data")
           setLoadingData(false)
         }
