@@ -15,7 +15,7 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { AlertCircle, BarChart3, Package, ShoppingCart, Users } from "lucide-react"
 
 export default function DashboardPage() {
-  const { user, loading: authLoading, logout } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const router = useRouter()
 
   const [products, setProducts] = useState<Product[]>([])
