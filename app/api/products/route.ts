@@ -2,6 +2,12 @@ import { type NextRequest, NextResponse } from "next/server"
 import clientPromise from "@/lib/mongodb"
 import type { Product } from "@/lib/models/product"
 import { recordPriceChange } from "@/lib/price-history"
+import { createProductSchema } from "@/lib/validators/product"
+import { ApiError, handleApiError } from "@/lib/error-handler"
+import { createLogger } from "@/lib/logger"
+import { cache } from "@/lib/cache"
+
+const logger = createLogger("products-api")
 
 // GET all products
 export async function GET(request: NextRequest) {
@@ -11,6 +17,14 @@ export async function GET(request: NextRequest) {
 
     const searchParams = request.nextUrl.searchParams
     const query: any = {}
+    const cacheKey = `products:${searchParams.toString()}`
+
+    // Try to get from cache first
+    const cachedData = cache.get<Product[]>(cacheKey)
+    if (cachedData) {
+      logger.info("Returning cached products data")
+      return NextResponse.json({ success: true, data: cachedData })
+    }
 
     // Add filters if provided
     if (searchParams.has("category")) {
@@ -24,10 +38,13 @@ export async function GET(request: NextRequest) {
 
     const products = await db.collection("products").find(query).toArray()
 
+    // Cache the results for 30 seconds
+    cache.set(cacheKey, products, 30)
+
     return NextResponse.json({ success: true, data: products })
   } catch (error) {
-    console.error("Error fetching products:", error)
-    return NextResponse.json({ success: false, error: "Failed to fetch products" }, { status: 500 })
+    logger.error("Error fetching products", error)
+    return handleApiError(error)
   }
 }
 
@@ -39,16 +56,16 @@ export async function POST(request: NextRequest) {
 
     const data = await request.json()
 
-    // Validate required fields
-    if (!data.name || data.stock === undefined) {
-      return NextResponse.json({ success: false, error: "Missing required fields" }, { status: 400 })
+    // Validate input data
+    const validationResult = createProductSchema.safeParse(data)
+    if (!validationResult.success) {
+      throw ApiError.badRequest("Invalid product data", "VALIDATION_ERROR", validationResult.error.format())
     }
 
+    const validatedData = validationResult.data
+
     const newProduct: Product = {
-      ...data,
-      price: data.price !== undefined ? Number.parseFloat(data.price) : 0,
-      cost: data.cost !== undefined ? Number.parseFloat(data.cost) : 0,
-      stock: Number.parseInt(data.stock),
+      ...validatedData,
       createdAt: new Date(),
       updatedAt: new Date(),
     }
@@ -64,9 +81,13 @@ export async function POST(request: NextRequest) {
       request.headers.get("user-id") || undefined,
     )
 
+    // Invalidate cache
+    cache.delete("products:")
+
+    logger.info("Product created", { productId: result.insertedId.toString() })
     return NextResponse.json({ success: true, data: { _id: result.insertedId, ...newProduct } }, { status: 201 })
   } catch (error) {
-    console.error("Error creating product:", error)
-    return NextResponse.json({ success: false, error: "Failed to create product" }, { status: 500 })
+    logger.error("Error creating product", error)
+    return handleApiError(error)
   }
 }
