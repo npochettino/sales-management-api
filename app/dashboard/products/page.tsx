@@ -1,404 +1,433 @@
 "use client"
 
-import type React from "react"
-
 import { useState, useEffect } from "react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { Plus, Search, Filter, Edit, Trash2, AlertCircle, RefreshCw } from "lucide-react"
+import { type Product, calculateMargin } from "@/lib/models/product"
+import type { Category } from "@/lib/models/category"
 import { productService } from "@/services/productService"
-import type { Product } from "@/lib/models/product"
+import { categoryService } from "@/services/categoryService"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { LoadingSpinner } from "@/components/ui/loading-spinner"
+import { EmptyState } from "@/components/ui/empty-state"
+import { toast } from "@/components/ui/use-toast"
+import type { ObjectId } from "mongodb"
 
 export default function ProductsPage() {
+  const router = useRouter()
   const [products, setProducts] = useState<Product[]>([])
+  const [categories, setCategories] = useState<Category[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState("")
-  const [showForm, setShowForm] = useState(false)
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [searchTerm, setSearchTerm] = useState("")
+  const [selectedCategory, setSelectedCategory] = useState("")
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [productToDelete, setProductToDelete] = useState<Product | null>(null)
+  const [loadingCategories, setLoadingCategories] = useState(false)
 
-  // Form state
-  const [formData, setFormData] = useState({
-    name: "",
-    description: "",
-    price: "",
-    cost: "",
-    stock: "",
-    category: "",
-    priceChangeReason: "", // New field for tracking the reason for price changes
-  })
+  useEffect(() => {
+    loadData()
+  }, [])
 
-  const fetchProducts = async () => {
+  const loadCategories = async () => {
+    try {
+      setLoadingCategories(true)
+      const categoriesResponse = await categoryService.getCategories()
+      if (!categoriesResponse.success) {
+        throw new Error(categoriesResponse.message || "Failed to load categories")
+      }
+
+      if (categoriesResponse.data.length === 0) {
+        // If no categories, try one more time (in case they're being initialized)
+        setTimeout(async () => {
+          const retryResponse = await categoryService.getCategories()
+          if (retryResponse.success) {
+            setCategories(retryResponse.data)
+          }
+          setLoadingCategories(false)
+        }, 1000)
+      } else {
+        setCategories(categoriesResponse.data)
+        setLoadingCategories(false)
+      }
+    } catch (err: any) {
+      console.error("Error loading categories:", err)
+      setLoadingCategories(false)
+      // Don't set error state here, just log it
+    }
+  }
+
+  const loadData = async () => {
     try {
       setLoading(true)
-      const response = await productService.getProducts()
-      setProducts(response.data)
-      setError("")
+      setError(null)
+
+      // Load categories first
+      await loadCategories()
+
+      // Then load products
+      const productsResponse = await productService.getProducts()
+      if (!productsResponse.success) {
+        throw new Error(productsResponse.message || "Failed to load products")
+      }
+      setProducts(productsResponse.data)
     } catch (err: any) {
-      setError(err.message || "Failed to fetch products")
+      setError(err.message || "Failed to load data")
+      toast({
+        title: "Error",
+        description: err.message || "Failed to load data",
+        variant: "destructive",
+      })
     } finally {
       setLoading(false)
     }
   }
 
-  useEffect(() => {
-    fetchProducts()
-  }, [])
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    const { name, value } = e.target
-    setFormData((prev) => ({ ...prev, [name]: value }))
-  }
-
-  const resetForm = () => {
-    setFormData({
-      name: "",
-      description: "",
-      price: "",
-      cost: "",
-      stock: "",
-      category: "",
-      priceChangeReason: "",
-    })
-    setEditingProduct(null)
-  }
-
-  const handleAddNew = () => {
-    resetForm()
-    setShowForm(true)
-  }
-
-  const handleEdit = (product: Product) => {
-    setFormData({
-      name: product.name,
-      description: product.description,
-      price: product.price !== undefined ? product.price.toString() : "0",
-      cost: product.cost !== undefined ? product.cost.toString() : "0",
-      stock: product.stock.toString(),
-      category: product.category,
-      priceChangeReason: "",
-    })
-    setEditingProduct(product)
-    setShowForm(true)
-  }
-
-  const handleDelete = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this product?")) return
-
+  const handleSearch = async () => {
     try {
-      await productService.deleteProduct(id)
-      await fetchProducts()
-    } catch (err: any) {
-      setError(err.message || "Failed to delete product")
-    }
-  }
+      setLoading(true)
+      // Use the filters object
+      const filters: { categoryId?: string; search?: string } = {}
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-
-    try {
-      const productData: any = {
-        name: formData.name,
-        description: formData.description,
-        price: Number.parseFloat(formData.price || "0"),
-        cost: Number.parseFloat(formData.cost || "0"),
-        stock: Number.parseInt(formData.stock),
-        category: formData.category,
+      if (selectedCategory && selectedCategory !== "all") {
+        filters.categoryId = selectedCategory
       }
 
-      // Only include reason if price or cost changed
-      if (
-        editingProduct &&
-        (editingProduct.price !== Number.parseFloat(formData.price || "0") ||
-          editingProduct.cost !== Number.parseFloat(formData.cost || "0")) &&
-        formData.priceChangeReason
-      ) {
-        productData.priceChangeReason = formData.priceChangeReason
+      if (searchTerm) {
+        filters.search = searchTerm
       }
 
-      if (editingProduct && editingProduct._id) {
-        await productService.updateProduct(editingProduct._id.toString(), productData)
+      const response = await productService.getProducts(Object.keys(filters).length > 0 ? filters : undefined)
+      if (response.success) {
+        setProducts(response.data)
       } else {
-        await productService.createProduct(productData)
+        throw new Error(response.message || "Failed to search products")
       }
-
-      resetForm()
-      setShowForm(false)
-      await fetchProducts()
     } catch (err: any) {
-      setError(err.message || "Failed to save product")
+      toast({
+        title: "Error",
+        description: err.message || "Failed to search products",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
     }
   }
 
-  // Calculate profit margin percentage
-  const calculateMargin = (cost: number | undefined | null, price: number | undefined | null) => {
-    // Handle undefined or null values
-    if (cost === undefined || cost === null || price === undefined || price === null) {
-      return "N/A"
-    }
+  const handleCategoryChange = async (value: string) => {
+    try {
+      setSelectedCategory(value)
+      setLoading(true)
 
-    if (cost === 0) return "∞"
-    const margin = ((price - cost) / price) * 100
-    return margin.toFixed(2) + "%"
+      // Use the filters object
+      const filters: { categoryId?: string; search?: string } = {}
+
+      if (value && value !== "all") {
+        filters.categoryId = value
+      }
+
+      if (searchTerm) {
+        filters.search = searchTerm
+      }
+
+      const response = await productService.getProducts(Object.keys(filters).length > 0 ? filters : undefined)
+      if (response.success) {
+        setProducts(response.data)
+      } else {
+        throw new Error(response.message || "Failed to filter products")
+      }
+    } catch (err: any) {
+      toast({
+        title: "Error",
+        description: err.message || "Failed to filter products",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDeleteClick = (product: Product) => {
+    setProductToDelete(product)
+    setDeleteDialogOpen(true)
+  }
+
+  const confirmDelete = async () => {
+    if (!productToDelete?._id) return
+
+    try {
+      const response = await productService.deleteProduct(productToDelete._id.toString())
+      if (response.success) {
+        toast({
+          title: "Success",
+          description: response.message || "Product deleted successfully",
+        })
+
+        // Refresh the product list
+        const updatedProducts = products.filter((p) => p._id?.toString() !== productToDelete._id?.toString())
+        setProducts(updatedProducts)
+      } else {
+        throw new Error(response.message || "Failed to delete product")
+      }
+    } catch (err: any) {
+      toast({
+        title: "Error",
+        description: err.message || "Failed to delete product",
+        variant: "destructive",
+      })
+    } finally {
+      setDeleteDialogOpen(false)
+      setProductToDelete(null)
+    }
+  }
+
+  const resetFilters = async () => {
+    setSearchTerm("")
+    setSelectedCategory("")
+    try {
+      setLoading(true)
+      const response = await productService.getProducts()
+      if (response.success) {
+        setProducts(response.data)
+      } else {
+        throw new Error(response.message || "Failed to reset filters")
+      }
+    } catch (err: any) {
+      toast({
+        title: "Error",
+        description: err.message || "Failed to reset filters",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const getCategoryColor = (categoryId?: string | ObjectId) => {
+    if (!categoryId) return "#6B7280" // Default gray
+    const category = categories.find((c) => c._id?.toString() === categoryId.toString())
+    return category?.color || "#6B7280"
+  }
+
+  if (loading) {
+    return <LoadingSpinner />
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center p-4">
+        <div className="flex items-center text-red-500 mb-4">
+          <AlertCircle className="mr-2" />
+          <span>Error loading products</span>
+        </div>
+        <Button onClick={loadData}>Try Again</Button>
+      </div>
+    )
   }
 
   return (
-    <div>
-      <div className="mb-6 flex items-center justify-between">
+    <div className="container mx-auto p-4">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
         <h1 className="text-2xl font-bold">Products</h1>
-        <button onClick={handleAddNew} className="rounded-md bg-blue-600 px-4 py-2 text-white hover:bg-blue-700">
-          Add New Product
-        </button>
+        <div className="flex flex-col sm:flex-row gap-4 w-full md:w-auto">
+          <div className="flex gap-2 w-full sm:w-auto">
+            <div className="relative flex-1">
+              <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+              <Input
+                placeholder="Search products..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                className="pl-8"
+              />
+            </div>
+            <Button onClick={handleSearch} variant="outline">
+              Search
+            </Button>
+          </div>
+
+          <div className="flex gap-2 w-full sm:w-auto">
+            <Select value={selectedCategory} onValueChange={handleCategoryChange}>
+              <SelectTrigger className="w-full sm:w-[180px]">
+                <div className="flex items-center">
+                  <Filter size={16} className="mr-2" />
+                  <SelectValue placeholder="All Categories" />
+                </div>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Categories</SelectItem>
+                {categories.length === 0 ? (
+                  <div className="px-2 py-4 text-center">
+                    <div className="text-sm text-gray-500 mb-2">No categories found</div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        loadCategories()
+                      }}
+                      disabled={loadingCategories}
+                      className="w-full"
+                    >
+                      {loadingCategories ? (
+                        <>
+                          <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                          Loading...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                          Refresh
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                ) : (
+                  categories.map((category) => (
+                    <SelectItem key={category._id?.toString()} value={category._id?.toString() || "none"}>
+                      <div className="flex items-center">
+                        <div
+                          className="w-3 h-3 rounded-full mr-2"
+                          style={{ backgroundColor: category.color || "#6B7280" }}
+                        />
+                        {category.name}
+                      </div>
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+
+            {(searchTerm || selectedCategory) && (
+              <Button variant="ghost" onClick={resetFilters} size="icon">
+                ✕
+              </Button>
+            )}
+
+            <Button asChild>
+              <Link href="/dashboard/products/new">
+                <Plus className="mr-2 h-4 w-4" /> Add Product
+              </Link>
+            </Button>
+          </div>
+        </div>
       </div>
 
-      {error && <div className="mb-4 rounded-md bg-red-50 p-4 text-sm text-red-700">{error}</div>}
-
-      {showForm && (
-        <div className="mb-6 rounded-lg bg-white p-6 shadow">
-          <h2 className="mb-4 text-xl font-semibold">{editingProduct ? "Edit Product" : "Add New Product"}</h2>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div>
-                <label htmlFor="name" className="block text-sm font-medium text-gray-700">
-                  Name
-                </label>
-                <input
-                  type="text"
-                  id="name"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleInputChange}
-                  required
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="category" className="block text-sm font-medium text-gray-700">
-                  Category
-                </label>
-                <input
-                  type="text"
-                  id="category"
-                  name="category"
-                  value={formData.category}
-                  onChange={handleInputChange}
-                  required
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="cost" className="block text-sm font-medium text-gray-700">
-                  Cost Price
-                </label>
-                <input
-                  type="number"
-                  id="cost"
-                  name="cost"
-                  value={formData.cost}
-                  onChange={handleInputChange}
-                  required
-                  min="0"
-                  step="0.01"
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="price" className="block text-sm font-medium text-gray-700">
-                  Sale Price
-                </label>
-                <input
-                  type="number"
-                  id="price"
-                  name="price"
-                  value={formData.price}
-                  onChange={handleInputChange}
-                  required
-                  min="0"
-                  step="0.01"
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="stock" className="block text-sm font-medium text-gray-700">
-                  Stock
-                </label>
-                <input
-                  type="number"
-                  id="stock"
-                  name="stock"
-                  value={formData.stock}
-                  onChange={handleInputChange}
-                  required
-                  min="0"
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
-                />
-              </div>
-
-              {/* Reason for price change - only show when editing and price/cost changed */}
-              {editingProduct &&
-                (editingProduct.price !== Number.parseFloat(formData.price || "0") ||
-                  editingProduct.cost !== Number.parseFloat(formData.cost || "0")) && (
-                  <div>
-                    <label htmlFor="priceChangeReason" className="block text-sm font-medium text-gray-700">
-                      Reason for Price Change
-                    </label>
-                    <input
-                      type="text"
-                      id="priceChangeReason"
-                      name="priceChangeReason"
-                      value={formData.priceChangeReason}
-                      onChange={handleInputChange}
-                      placeholder="E.g., Supplier price increase, Promotion, etc."
-                      className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
-                    />
-                  </div>
-                )}
-
-              <div className="md:col-span-2">
-                <label htmlFor="description" className="block text-sm font-medium text-gray-700">
-                  Description
-                </label>
-                <textarea
-                  id="description"
-                  name="description"
-                  value={formData.description}
-                  onChange={handleInputChange}
-                  rows={3}
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end space-x-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowForm(false)
-                  resetForm()
-                }}
-                className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-              >
-                {editingProduct ? "Update" : "Create"}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {loading ? (
-        <div className="text-center">Loading products...</div>
+      {products.length === 0 ? (
+        <EmptyState
+          title="No products found"
+          description={
+            searchTerm || selectedCategory
+              ? "Try adjusting your search or filters"
+              : "Create your first product to get started"
+          }
+          action={
+            searchTerm || selectedCategory ? (
+              <Button onClick={resetFilters}>Clear Filters</Button>
+            ) : (
+              <Button asChild>
+                <Link href="/dashboard/products/new">
+                  <Plus className="mr-2 h-4 w-4" /> Add Product
+                </Link>
+              </Button>
+            )
+          }
+        />
       ) : (
-        <div className="overflow-hidden rounded-lg bg-white shadow">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th
-                  scope="col"
-                  className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
-                >
-                  Name
-                </th>
-                <th
-                  scope="col"
-                  className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
-                >
-                  Category
-                </th>
-                <th
-                  scope="col"
-                  className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
-                >
-                  Cost
-                </th>
-                <th
-                  scope="col"
-                  className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
-                >
-                  Price
-                </th>
-                <th
-                  scope="col"
-                  className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
-                >
-                  Margin
-                </th>
-                <th
-                  scope="col"
-                  className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
-                >
-                  Stock
-                </th>
-                <th scope="col" className="relative px-6 py-3">
-                  <span className="sr-only">Actions</span>
-                </th>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="bg-gray-100 dark:bg-gray-800">
+                <th className="px-4 py-2 text-left">Name</th>
+                <th className="px-4 py-2 text-left">Category</th>
+                <th className="px-4 py-2 text-right">Price</th>
+                <th className="px-4 py-2 text-right">Cost</th>
+                <th className="px-4 py-2 text-right">Margin</th>
+                <th className="px-4 py-2 text-right">Stock</th>
+                <th className="px-4 py-2 text-center">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
-              {products.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-4 text-center text-sm text-gray-500">
-                    No products found. Add your first product!
+            <tbody>
+              {products.map((product) => (
+                <tr key={product._id?.toString()} className="border-b hover:bg-gray-50 dark:hover:bg-gray-900">
+                  <td className="px-4 py-3">
+                    <Link href={`/dashboard/products/${product._id}`} className="font-medium hover:underline">
+                      {product.name}
+                    </Link>
+                    {product.sku && <div className="text-xs text-gray-500">SKU: {product.sku}</div>}
+                  </td>
+                  <td className="px-4 py-3">
+                    {product.categoryName ? (
+                      <div className="flex items-center">
+                        <div
+                          className="w-3 h-3 rounded-full mr-2"
+                          style={{ backgroundColor: getCategoryColor(product.categoryId) }}
+                        />
+                        <span>{product.categoryName}</span>
+                      </div>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right">${product.price?.toFixed(2)}</td>
+                  <td className="px-4 py-3 text-right">${product.cost?.toFixed(2)}</td>
+                  <td className="px-4 py-3 text-right">{calculateMargin(product).toFixed(1)}%</td>
+                  <td className="px-4 py-3 text-right">{product.stock}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex justify-center space-x-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => router.push(`/dashboard/products/${product._id}`)}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-red-500 hover:text-red-700 hover:bg-red-100"
+                        onClick={() => handleDeleteClick(product)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
-              ) : (
-                products.map((product) => (
-                  <tr key={product._id?.toString()}>
-                    <td className="whitespace-nowrap px-6 py-4">
-                      <div className="text-sm font-medium text-gray-900">{product.name}</div>
-                      <div className="text-sm text-gray-500">
-                        {product.description ? product.description.substring(0, 50) + "..." : ""}
-                      </div>
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">{product.category}</td>
-                    <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                      ${product.cost !== undefined && product.cost !== null ? product.cost.toFixed(2) : "0.00"}
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                      ${product.price !== undefined && product.price !== null ? product.price.toFixed(2) : "0.00"}
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                      {calculateMargin(product.cost, product.price)}
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                      <span
-                        className={`inline-flex rounded-full px-2 text-xs font-semibold leading-5 ${
-                          product.stock > 10
-                            ? "bg-green-100 text-green-800"
-                            : product.stock > 0
-                              ? "bg-yellow-100 text-yellow-800"
-                              : "bg-red-100 text-red-800"
-                        }`}
-                      >
-                        {product.stock}
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium">
-                      <a href={`/dashboard/products/${product._id}`} className="mr-2 text-blue-600 hover:text-blue-900">
-                        Details
-                      </a>
-                      <button onClick={() => handleEdit(product)} className="mr-2 text-blue-600 hover:text-blue-900">
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleDelete(product._id!.toString())}
-                        className="text-red-600 hover:text-red-900"
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
+              ))}
             </tbody>
           </table>
         </div>
       )}
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the product "{productToDelete?.name}". This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-red-500 hover:bg-red-600">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

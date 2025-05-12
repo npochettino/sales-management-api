@@ -4,16 +4,18 @@ import { ObjectId } from "mongodb"
 import { recordPriceChange, getProductPriceHistory } from "@/lib/price-history"
 
 // GET a single product by ID
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const id = (await params).id
+    
     const client = await clientPromise
     const db = client.db()
 
-    if (!ObjectId.isValid(params.id)) {
+    if (!ObjectId.isValid(id)) {
       return NextResponse.json({ success: false, error: "Invalid product ID" }, { status: 400 })
     }
 
-    const product = await db.collection("products").findOne({ _id: new ObjectId(params.id) })
+    const product = await db.collection("products").findOne({ _id: new ObjectId(id) })
 
     if (!product) {
       return NextResponse.json({ success: false, error: "Product not found" }, { status: 404 })
@@ -23,7 +25,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     const includeHistory = request.nextUrl.searchParams.get("includeHistory") === "true"
 
     if (includeHistory) {
-      const priceHistory = await getProductPriceHistory(params.id)
+      const priceHistory = await getProductPriceHistory(id)
       return NextResponse.json({
         success: true,
         data: {
@@ -41,17 +43,19 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 }
 
 // PUT update a product
-export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const id = (await params).id
+
     const client = await clientPromise
     const db = client.db()
 
-    if (!ObjectId.isValid(params.id)) {
+    if (!ObjectId.isValid(id)) {
       return NextResponse.json({ success: false, error: "Invalid product ID" }, { status: 400 })
     }
 
     // Get the current product data for price history
-    const currentProduct = await db.collection("products").findOne({ _id: new ObjectId(params.id) })
+    const currentProduct = await db.collection("products").findOne({ _id: new ObjectId(id) })
 
     if (!currentProduct) {
       return NextResponse.json({ success: false, error: "Product not found" }, { status: 404 })
@@ -75,7 +79,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       (data.price !== undefined && data.price != currentProduct.price) ||
       (data.cost !== undefined && data.cost != currentProduct.cost)
 
-    const result = await db.collection("products").updateOne({ _id: new ObjectId(params.id) }, { $set: updateData })
+    const result = await db.collection("products").updateOne({ _id: new ObjectId(id) }, { $set: updateData })
 
     if (result.matchedCount === 0) {
       return NextResponse.json({ success: false, error: "Product not found" }, { status: 404 })
@@ -84,7 +88,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
     // Record price history if price or cost changed
     if (priceOrCostChanged) {
       await recordPriceChange(
-        params.id,
+        id,
         { cost: currentProduct.cost, price: currentProduct.price },
         {
           cost: data.cost !== undefined ? Number(data.cost) : currentProduct.cost,
@@ -97,7 +101,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
 
     return NextResponse.json({
       success: true,
-      data: { _id: params.id, ...updateData },
+      data: { _id: id, ...updateData },
     })
   } catch (error) {
     console.error("Error updating product:", error)
@@ -106,16 +110,18 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
 }
 
 // DELETE a product
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const id = (await params).id
+
     const client = await clientPromise
     const db = client.db()
 
-    if (!ObjectId.isValid(params.id)) {
+    if (!ObjectId.isValid(id)) {
       return NextResponse.json({ success: false, error: "Invalid product ID" }, { status: 400 })
     }
 
-    const result = await db.collection("products").deleteOne({ _id: new ObjectId(params.id) })
+    const result = await db.collection("products").deleteOne({ _id: new ObjectId(id) })
 
     if (result.deletedCount === 0) {
       return NextResponse.json({ success: false, error: "Product not found" }, { status: 404 })

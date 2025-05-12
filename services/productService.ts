@@ -1,29 +1,39 @@
 import { fetchApi } from "@/lib/api"
-import type { Product, PriceHistory } from "@/lib/models/product"
+import type { Product } from "@/lib/models/product"
+import type { PriceHistory } from "@/lib/models/product"
 
 type ProductsResponse = {
   success: boolean
   data: Product[]
+  message?: string // Add message property for error handling
 }
 
 type ProductResponse = {
   success: boolean
-  data: Product & { priceHistory?: PriceHistory[] }
+  data: Product
+  message?: string // Add message property for error handling
 }
 
 type PriceHistoryResponse = {
   success: boolean
   data: PriceHistory[]
+  message?: string // Add message property for error handling
+}
+
+type DeleteResponse = {
+  success: boolean
+  message: string
 }
 
 export const productService = {
   // Get all products
-  getProducts: async (filters?: { category?: string; inStock?: boolean }) => {
+  getProducts: async (filters?: { categoryId?: string; search?: string; inStock?: boolean }) => {
     let queryParams = ""
 
     if (filters) {
       const params = new URLSearchParams()
-      if (filters.category) params.append("category", filters.category)
+      if (filters.categoryId) params.append("categoryId", filters.categoryId)
+      if (filters.search) params.append("search", filters.search)
       if (filters.inStock) params.append("inStock", "true")
       queryParams = `?${params.toString()}`
     }
@@ -32,12 +42,11 @@ export const productService = {
   },
 
   // Get a single product
-  getProduct: async (id: string, includeHistory = false) => {
+  getProduct: async (id: string) => {
     if (!id) {
       throw new Error("Product ID is required")
     }
-    const queryParams = includeHistory ? "?includeHistory=true" : ""
-    return fetchApi<ProductResponse>(`products/${id}${queryParams}`)
+    return fetchApi<ProductResponse>(`products/${id}`)
   },
 
   // Get price history for a product
@@ -66,6 +75,6 @@ export const productService = {
     if (!id) {
       throw new Error("Product ID is required")
     }
-    return fetchApi<{ success: boolean; message: string }>(`products/${id}`, "DELETE")
+    return fetchApi<DeleteResponse>(`products/${id}`, "DELETE")
   },
 }

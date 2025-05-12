@@ -1,93 +1,123 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { getServerSession } from "next-auth/next"
+import { ObjectId } from "mongodb"
 import clientPromise from "@/lib/mongodb"
 import type { Product } from "@/lib/models/product"
+import { handleApiError } from "@/lib/error-handler"
+import { validateProduct } from "@/lib/validators/product"
 import { recordPriceChange } from "@/lib/price-history"
-import { createProductSchema } from "@/lib/validators/product"
-import { ApiError, handleApiError } from "@/lib/error-handler"
-import { createLogger } from "@/lib/logger"
-import { cache } from "@/lib/cache"
 
-const logger = createLogger("products-api")
-
-// GET all products
-export async function GET(request: NextRequest) {
+export async function GET(req: NextRequest) {
   try {
+    const session = await getServerSession()
+    if (!session) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
     const client = await clientPromise
     const db = client.db()
 
-    const searchParams = request.nextUrl.searchParams
+    // Get query parameters
+    const url = new URL(req.url)
+    const categoryId = url.searchParams.get("categoryId")
+    const search = url.searchParams.get("search")
+
+    // Build query
     const query: any = {}
-    const cacheKey = `products:${searchParams.toString()}`
 
-    // Try to get from cache first
-    const cachedData = cache.get<Product[]>(cacheKey)
-    if (cachedData) {
-      logger.info("Returning cached products data")
-      return NextResponse.json({ success: true, data: cachedData })
+    if (categoryId) {
+      query.categoryId = new ObjectId(categoryId)
     }
 
-    // Add filters if provided
-    if (searchParams.has("category")) {
-      query.category = searchParams.get("category")
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
+        { sku: { $regex: search, $options: "i" } },
+      ]
     }
 
-    // Add stock filter
-    if (searchParams.has("inStock")) {
-      query.stock = { $gt: 0 }
-    }
-
-    const products = await db.collection("products").find(query).toArray()
-
-    // Cache the results for 30 seconds
-    cache.set(cacheKey, products, 30)
+    const products = await db.collection("products").find(query).sort({ name: 1 }).toArray()
 
     return NextResponse.json({ success: true, data: products })
   } catch (error) {
-    logger.error("Error fetching products", error)
     return handleApiError(error)
   }
 }
 
-// POST create a new product
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    const client = await clientPromise
-    const db = client.db()
-
-    const data = await request.json()
-
-    // Validate input data
-    const validationResult = createProductSchema.safeParse(data)
-    if (!validationResult.success) {
-      throw ApiError.badRequest("Invalid product data", "VALIDATION_ERROR", validationResult.error.format())
+    const session = await getServerSession()
+    if (!session) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const validatedData = validationResult.data
+    const client = await clientPromise
+    const db = client.db()
+    const data = await req.json()
 
-    const newProduct: Product = {
-      ...validatedData,
+    // Validate product data
+    const validationResult = validateProduct(data)
+    if (!validationResult.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Validation failed",
+          details: validationResult.error.flatten().fieldErrors,
+        },
+        { status: 400 },
+      )
+    }
+
+    // Get category name if categoryId is provided
+    let categoryName = ""
+    if (data.categoryId) {
+      const category = await db.collection("categories").findOne({
+        _id: new ObjectId(data.categoryId),
+      })
+      if (category) {
+        categoryName = category.name
+      }
+    }
+
+    const newProduct: Omit<Product, "_id"> = {
+      name: data.name,
+      description: data.description || "",
+      price: Number.parseFloat(data.price),
+      cost: Number.parseFloat(data.cost || 0),
+      stock: Number.parseInt(data.stock || 0),
+      sku: data.sku || "",
+      categoryId: data.categoryId ? new ObjectId(data.categoryId) : undefined,
+      categoryName: categoryName,
       createdAt: new Date(),
       updatedAt: new Date(),
     }
 
     const result = await db.collection("products").insertOne(newProduct)
 
-    // Record initial price history (no "before" values for new product)
+    // Record initial price history
     await recordPriceChange(
       result.insertedId.toString(),
       null,
-      { cost: newProduct.cost, price: newProduct.price },
+      {
+        cost: newProduct.cost,
+        price: newProduct.price,
+      },
       "Initial product creation",
-      request.headers.get("user-id") || undefined,
+      session.user?.email || "system",
     )
 
-    // Invalidate cache
-    cache.delete("products:")
-
-    logger.info("Product created", { productId: result.insertedId.toString() })
-    return NextResponse.json({ success: true, data: { _id: result.insertedId, ...newProduct } }, { status: 201 })
+    return NextResponse.json(
+      {
+        success: true,
+        data: {
+          _id: result.insertedId,
+          ...newProduct,
+        },
+      },
+      { status: 201 },
+    )
   } catch (error) {
-    logger.error("Error creating product", error)
     return handleApiError(error)
   }
 }

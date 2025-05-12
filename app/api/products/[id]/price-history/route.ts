@@ -3,10 +3,10 @@ import { ObjectId } from "mongodb"
 import { getProductPriceHistory } from "@/lib/price-history"
 
 // GET price history for a product
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     // Make sure params.id exists and is valid
-    const id = params?.id
+    const id = (await params).id
 
     if (!id || !ObjectId.isValid(id)) {
       return NextResponse.json({ success: false, error: "Invalid product ID" }, { status: 400 })

@@ -221,7 +221,7 @@ export default function DashboardPage() {
                           <div className="flex items-center justify-between">
                             <div>
                               <p className="text-sm font-medium text-gray-900">{product.name}</p>
-                              <p className="text-sm text-gray-500">{product.category}</p>
+                              <p className="text-sm text-gray-500">{product.categoryName}</p>
                             </div>
                             <span
                               className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
